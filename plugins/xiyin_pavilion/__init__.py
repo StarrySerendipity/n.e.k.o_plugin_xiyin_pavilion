@@ -53,6 +53,7 @@ _DEFAULT_MAX_UPLOAD_MB = 500
 _DEFAULT_MAX_AUDIO_SIZE_BYTES = _DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
 _UPLOAD_SUBDIR = "uploads"
 _DEFAULT_PLUGIN_SERVER_PORT = 48916
+_DEFAULT_MUSIC_SERVER_PORT = 48917
 _STATE_FILE_NAME = "scheduler_state.json"
 _UPLOAD_NAME_MAP_FILE_NAME = "upload_name_map.json"
 _LYRIC_MAP_FILE_NAME = "lyrics_map.json"
@@ -522,7 +523,7 @@ class XiYinPavilionPlugin(NekoPluginBase):
         # HTTP服务器相关
         self._music_server: HTTPServer | None = None
         self._music_server_thread: threading.Thread | None = None
-        self._music_server_port = _DEFAULT_PLUGIN_SERVER_PORT
+        self._music_server_port = _DEFAULT_MUSIC_SERVER_PORT
 
         self._playback_state: dict[str, Any] = {
             "status": "idle",
@@ -558,8 +559,8 @@ class XiYinPavilionPlugin(NekoPluginBase):
         return self.data_path(_LYRIC_MAP_FILE_NAME)
 
     def _build_ui_file_url(self, stored_filename: str) -> str:
-        # 使用 /api/ 开头的URL格式，绕过前端安全拦截
-        return f"/api/plugin/{self.plugin_id}/music/{stored_filename}"
+        # 使用独立音乐服务器端口，生成绝对URL
+        return f"http://127.0.0.1:{self._music_server_port}/api/plugin/{self.plugin_id}/music/{stored_filename}"
     
     def _start_music_server(self) -> bool:
         """启动HTTP服务器提供音乐文件服务"""
@@ -771,7 +772,10 @@ class XiYinPavilionPlugin(NekoPluginBase):
             return False
         if not self._music_filename_from_api_path(str(parsed.path or "")):
             return False
-        return self._matches_public_origin(parsed)
+        # 音乐服务器使用独立端口，检查主机和端口是否匹配
+        host = str(parsed.hostname or "").strip().lower()
+        port = parsed.port or _default_port_for_scheme(parsed.scheme)
+        return host in {"127.0.0.1", "localhost", "::1"} and port == self._music_server_port
 
     def _rebase_known_upload_url_locked(self, url: str) -> str:
         normalized = self._normalize_legacy_url(url)

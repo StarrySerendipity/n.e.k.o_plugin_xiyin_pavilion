@@ -584,8 +584,19 @@ class XiYinPavilionPlugin(NekoPluginBase):
                 name=f"music-server-{self.plugin_id}"
             )
             self._music_server_thread.start()
-            
+
             self.logger.info(f"音乐文件服务器已启动: http://127.0.0.1:{self._music_server_port}")
+
+            # 通过主项目的 music_allowlist_add 机制，动态把 127.0.0.1 加到前端白名单
+            try:
+                self.push_message(
+                    message_type="music_allowlist_add",
+                    metadata={"domains": ["127.0.0.1"]},
+                )
+                self.logger.info("已请求将 127.0.0.1 添加到前端音乐播放白名单")
+            except Exception as e:
+                self.logger.warning(f"添加白名单失败: {e}")
+
             return True
         except Exception as exc:
             self.logger.warning(f"启动音乐文件服务器失败: {exc}")

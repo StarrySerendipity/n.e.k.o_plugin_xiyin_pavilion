@@ -743,6 +743,17 @@ class XiYinPavilionPlugin(NekoPluginBase):
             return ""
         return filename if filename == Path(filename).name else ""
 
+    def _music_filename_from_api_path(self, path: str) -> str:
+        """从 /api/plugin/{plugin_id}/music/{filename} 提取文件名"""
+        prefix = f"/api/plugin/{self.plugin_id}/music/"
+        raw_path = str(path or "")
+        if not raw_path.startswith(prefix):
+            return ""
+        filename = raw_path.removeprefix(prefix).strip()
+        if not filename or "/" in filename:
+            return ""
+        return filename if filename == Path(filename).name else ""
+
     def _is_plugin_upload_url(self, url: str) -> bool:
         parsed = _parse_http_url(url)
         if parsed is None:
@@ -751,6 +762,15 @@ class XiYinPavilionPlugin(NekoPluginBase):
         if not self._upload_filename_from_path(str(parsed.path or "")):
             return False
 
+        return self._matches_public_origin(parsed)
+
+    def _is_plugin_music_api_url(self, url: str) -> bool:
+        """判断是否为插件音乐 API URL: /api/plugin/{id}/music/{filename}"""
+        parsed = _parse_http_url(url)
+        if parsed is None:
+            return False
+        if not self._music_filename_from_api_path(str(parsed.path or "")):
+            return False
         return self._matches_public_origin(parsed)
 
     def _rebase_known_upload_url_locked(self, url: str) -> str:
@@ -850,9 +870,16 @@ class XiYinPavilionPlugin(NekoPluginBase):
         if not host:
             return []
 
+        # 插件上传 URL: /plugin/{id}/ui/uploads/{filename}
         if self._is_plugin_upload_url(url) and host in {"127.0.0.1", "localhost", "::1"}:
             return ["127.0.0.1", "localhost", "::1"]
         if self._is_plugin_upload_url(url):
+            return [host]
+
+        # 插件音乐 API URL: /api/plugin/{id}/music/{filename}
+        if self._is_plugin_music_api_url(url) and host in {"127.0.0.1", "localhost", "::1"}:
+            return ["127.0.0.1", "localhost", "::1"]
+        if self._is_plugin_music_api_url(url):
             return [host]
 
         if ":" in host:
@@ -1278,18 +1305,25 @@ class XiYinPavilionPlugin(NekoPluginBase):
 
     def _upload_filename_from_url(self, url: str) -> str:
         normalized_url = self._normalize_legacy_url(str(url or "").strip())
-        if not self._is_plugin_upload_url(normalized_url):
-            return ""
         parsed = _parse_http_url(normalized_url)
         if parsed is None:
             return ""
 
-        upload_prefix = f"/plugin/{self.plugin_id}/ui/{_UPLOAD_SUBDIR}/"
         path = str(parsed.path or "")
-        if not path.startswith(upload_prefix):
-            return ""
-        filename = path.removeprefix(upload_prefix).split("/", 1)[0].strip()
-        return filename if filename and filename == Path(filename).name else ""
+
+        # 旧格式: /plugin/{id}/ui/uploads/{filename}
+        upload_prefix = f"/plugin/{self.plugin_id}/ui/{_UPLOAD_SUBDIR}/"
+        if path.startswith(upload_prefix):
+            filename = path.removeprefix(upload_prefix).split("/", 1)[0].strip()
+            return filename if filename and filename == Path(filename).name else ""
+
+        # 新格式: /api/plugin/{id}/music/{filename}
+        music_prefix = f"/api/plugin/{self.plugin_id}/music/"
+        if path.startswith(music_prefix):
+            filename = path.removeprefix(music_prefix).split("/", 1)[0].strip()
+            return filename if filename and filename == Path(filename).name else ""
+
+        return ""
 
     def _missing_upload_reference_in_queue_locked(self, queue: list[dict[str, Any]]) -> str:
         for track in queue:

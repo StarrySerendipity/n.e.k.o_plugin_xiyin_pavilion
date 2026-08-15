@@ -22,7 +22,6 @@ import socket
 import threading
 import time
 from datetime import datetime, timezone
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -53,7 +52,6 @@ _DEFAULT_MAX_UPLOAD_MB = 500
 _DEFAULT_MAX_AUDIO_SIZE_BYTES = _DEFAULT_MAX_UPLOAD_MB * 1024 * 1024
 _UPLOAD_SUBDIR = "uploads"
 _DEFAULT_PLUGIN_SERVER_PORT = 48916
-_DEFAULT_MUSIC_SERVER_PORT = 48917
 _STATE_FILE_NAME = "scheduler_state.json"
 _UPLOAD_NAME_MAP_FILE_NAME = "upload_name_map.json"
 _LYRIC_MAP_FILE_NAME = "lyrics_map.json"
@@ -407,90 +405,6 @@ def _extract_duration_from_av_container(container: Any) -> int | None:
     return None
 
 
-class MusicFileHandler(BaseHTTPRequestHandler):
-    """处理 /api/plugin/{plugin_id}/music/{filename} 请求的HTTP处理器"""
-    
-    plugin_instance = None  # 将在插件初始化时设置
-    
-    def log_message(self, format, *args):
-        """禁用默认的日志输出"""
-        pass
-    
-    def do_GET(self):
-        """处理GET请求"""
-        # 解析路径: /api/plugin/{plugin_id}/music/{filename}
-        path_parts = self.path.strip('/').split('/')
-        
-        # 验证路径格式
-        if len(path_parts) != 5 or path_parts[0] != 'api' or path_parts[2] != 'music':
-            self.send_response(404)
-            self.end_headers()
-            return
-        
-        plugin_id = path_parts[1]
-        filename = path_parts[4]
-        
-        # 验证plugin_id
-        if self.plugin_instance is None or self.plugin_instance.plugin_id != plugin_id:
-            self.send_response(404)
-            self.end_headers()
-            return
-        
-        # 构建文件路径
-        file_path = self.plugin_instance._upload_dir / filename
-        
-        # 安全检查：确保文件在上传目录内
-        try:
-            file_path = file_path.resolve()
-            upload_dir = self.plugin_instance._upload_dir.resolve()
-            if not str(file_path).startswith(str(upload_dir)):
-                self.send_response(403)
-                self.end_headers()
-                return
-        except Exception:
-            self.send_response(400)
-            self.end_headers()
-            return
-        
-        # 检查文件是否存在
-        if not file_path.is_file():
-            self.send_response(404)
-            self.end_headers()
-            return
-        
-        # 检查文件扩展名
-        if file_path.suffix.lower() not in _ALLOWED_AUDIO_EXTENSIONS:
-            self.send_response(403)
-            self.end_headers()
-            return
-        
-        # 发送文件
-        try:
-            self.send_response(200)
-            
-            # 设置Content-Type
-            ext = file_path.suffix.lower()
-            content_type_map = {
-                '.mp3': 'audio/mpeg',
-                '.wav': 'audio/wav',
-                '.ogg': 'audio/ogg',
-                '.m4a': 'audio/mp4',
-                '.aac': 'audio/aac',
-                '.flac': 'audio/flac',
-            }
-            self.send_header('Content-Type', content_type_map.get(ext, 'application/octet-stream'))
-            
-            # 读取并发送文件
-            with open(file_path, 'rb') as f:
-                data = f.read()
-                self.send_header('Content-Length', str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
-        except Exception:
-            self.send_response(500)
-            self.end_headers()
-
-
 @neko_plugin
 class XiYinPavilionPlugin(NekoPluginBase):
     """汐音阁 · XiYin Pavilion —— 音乐推送 + 定时队列插件。"""
@@ -519,11 +433,6 @@ class XiYinPavilionPlugin(NekoPluginBase):
         self._original_push_message = None
         self._push_mapper_installed = False
         self._attach_prompt_on_push = _DEFAULT_ATTACH_PROMPT_ON_PUSH
-        
-        # HTTP服务器相关
-        self._music_server: HTTPServer | None = None
-        self._music_server_thread: threading.Thread | None = None
-        self._music_server_port = _DEFAULT_MUSIC_SERVER_PORT
 
         self._playback_state: dict[str, Any] = {
             "status": "idle",
@@ -559,64 +468,7 @@ class XiYinPavilionPlugin(NekoPluginBase):
         return self.data_path(_LYRIC_MAP_FILE_NAME)
 
     def _build_ui_file_url(self, stored_filename: str) -> str:
-        # 使用独立音乐服务器端口，生成绝对URL
-        return f"http://127.0.0.1:{self._music_server_port}/api/plugin/{self.plugin_id}/music/{stored_filename}"
-    
-    def _start_music_server(self) -> bool:
-        """启动HTTP服务器提供音乐文件服务"""
-        if self._music_server is not None:
-            return True
-        
-        try:
-            # 设置处理器引用当前插件实例
-            MusicFileHandler.plugin_instance = self
-            
-            # 创建HTTP服务器
-            self._music_server = HTTPServer(
-                ('127.0.0.1', self._music_server_port),
-                MusicFileHandler
-            )
-            
-            # 在后台线程中运行服务器
-            self._music_server_thread = threading.Thread(
-                target=self._music_server.serve_forever,
-                daemon=True,
-                name=f"music-server-{self.plugin_id}"
-            )
-            self._music_server_thread.start()
-
-            self.logger.info(f"音乐文件服务器已启动: http://127.0.0.1:{self._music_server_port}")
-
-            # 通过主项目的 music_allowlist_add 机制，动态把 127.0.0.1 加到前端白名单
-            try:
-                self.push_message(
-                    message_type="music_allowlist_add",
-                    metadata={"domains": ["127.0.0.1"]},
-                )
-                self.logger.info("已请求将 127.0.0.1 添加到前端音乐播放白名单")
-            except Exception as e:
-                self.logger.warning(f"添加白名单失败: {e}")
-
-            return True
-        except Exception as exc:
-            self.logger.warning(f"启动音乐文件服务器失败: {exc}")
-            self._music_server = None
-            self._music_server_thread = None
-            return False
-    
-    def _stop_music_server(self) -> None:
-        """停止HTTP服务器"""
-        if self._music_server is not None:
-            try:
-                self._music_server.shutdown()
-                self._music_server.server_close()
-                self.logger.info("音乐文件服务器已停止")
-            except Exception as exc:
-                self.logger.warning(f"停止音乐文件服务器时出现异常: {exc}")
-            finally:
-                self._music_server = None
-                self._music_server_thread = None
-                MusicFileHandler.plugin_instance = None
+        return f"/plugin/{self.plugin_id}/ui/{_UPLOAD_SUBDIR}/{stored_filename}"
 
     def _copy_static_ui_assets(self) -> None:
         source_dir = self._source_static_dir
@@ -755,17 +607,6 @@ class XiYinPavilionPlugin(NekoPluginBase):
             return ""
         return filename if filename == Path(filename).name else ""
 
-    def _music_filename_from_api_path(self, path: str) -> str:
-        """从 /api/plugin/{plugin_id}/music/{filename} 提取文件名"""
-        prefix = f"/api/plugin/{self.plugin_id}/music/"
-        raw_path = str(path or "")
-        if not raw_path.startswith(prefix):
-            return ""
-        filename = raw_path.removeprefix(prefix).strip()
-        if not filename or "/" in filename:
-            return ""
-        return filename if filename == Path(filename).name else ""
-
     def _is_plugin_upload_url(self, url: str) -> bool:
         parsed = _parse_http_url(url)
         if parsed is None:
@@ -775,18 +616,6 @@ class XiYinPavilionPlugin(NekoPluginBase):
             return False
 
         return self._matches_public_origin(parsed)
-
-    def _is_plugin_music_api_url(self, url: str) -> bool:
-        """判断是否为插件音乐 API URL: /api/plugin/{id}/music/{filename}"""
-        parsed = _parse_http_url(url)
-        if parsed is None:
-            return False
-        if not self._music_filename_from_api_path(str(parsed.path or "")):
-            return False
-        # 音乐服务器使用独立端口，检查主机和端口是否匹配
-        host = str(parsed.hostname or "").strip().lower()
-        port = parsed.port or _default_port_for_scheme(parsed.scheme)
-        return host in {"127.0.0.1", "localhost", "::1"} and port == self._music_server_port
 
     def _rebase_known_upload_url_locked(self, url: str) -> str:
         normalized = self._normalize_legacy_url(url)
@@ -885,16 +714,9 @@ class XiYinPavilionPlugin(NekoPluginBase):
         if not host:
             return []
 
-        # 插件上传 URL: /plugin/{id}/ui/uploads/{filename}
         if self._is_plugin_upload_url(url) and host in {"127.0.0.1", "localhost", "::1"}:
             return ["127.0.0.1", "localhost", "::1"]
         if self._is_plugin_upload_url(url):
-            return [host]
-
-        # 插件音乐 API URL: /api/plugin/{id}/music/{filename}
-        if self._is_plugin_music_api_url(url) and host in {"127.0.0.1", "localhost", "::1"}:
-            return ["127.0.0.1", "localhost", "::1"]
-        if self._is_plugin_music_api_url(url):
             return [host]
 
         if ":" in host:
@@ -1320,25 +1142,18 @@ class XiYinPavilionPlugin(NekoPluginBase):
 
     def _upload_filename_from_url(self, url: str) -> str:
         normalized_url = self._normalize_legacy_url(str(url or "").strip())
+        if not self._is_plugin_upload_url(normalized_url):
+            return ""
         parsed = _parse_http_url(normalized_url)
         if parsed is None:
             return ""
 
-        path = str(parsed.path or "")
-
-        # 旧格式: /plugin/{id}/ui/uploads/{filename}
         upload_prefix = f"/plugin/{self.plugin_id}/ui/{_UPLOAD_SUBDIR}/"
-        if path.startswith(upload_prefix):
-            filename = path.removeprefix(upload_prefix).split("/", 1)[0].strip()
-            return filename if filename and filename == Path(filename).name else ""
-
-        # 新格式: /api/plugin/{id}/music/{filename}
-        music_prefix = f"/api/plugin/{self.plugin_id}/music/"
-        if path.startswith(music_prefix):
-            filename = path.removeprefix(music_prefix).split("/", 1)[0].strip()
-            return filename if filename and filename == Path(filename).name else ""
-
-        return ""
+        path = str(parsed.path or "")
+        if not path.startswith(upload_prefix):
+            return ""
+        filename = path.removeprefix(upload_prefix).split("/", 1)[0].strip()
+        return filename if filename and filename == Path(filename).name else ""
 
     def _missing_upload_reference_in_queue_locked(self, queue: list[dict[str, Any]]) -> str:
         for track in queue:
@@ -1736,19 +1551,12 @@ class XiYinPavilionPlugin(NekoPluginBase):
         if not domains:
             raise ValueError("url 无法安全加入播放白名单")
 
-        # 最新版前端 isSafeUrl 对 HTTP URL 要求 pluginHttpUrls 精确匹配完整 URL，
-        # 必须通过 http_urls 字段把完整音乐 URL 传给前端。
-        http_urls = [url] if url.lower().startswith("http://") else []
         self.ctx.push_message(
             source="xiyin_pavilion",
             message_type="music_allowlist_add",
             description=f"Allow music host: {domains[0]}",
             priority=7,
-            metadata={
-                "domains": domains,
-                "http_urls": http_urls,
-                "event_id": event_id,
-            },
+            metadata={"domains": domains, "event_id": event_id},
             target_lanlan=target_lanlan,
         )
 
@@ -2105,7 +1913,6 @@ class XiYinPavilionPlugin(NekoPluginBase):
             self._save_state_locked()
         self._install_push_mapper()
         self._register_writable_static_ui()
-        self._start_music_server()
         self._scheduler_stop.clear()
         self._ensure_scheduler_task()
         return Ok("汐音阁已启动（含定时队列）")
@@ -2154,8 +1961,6 @@ class XiYinPavilionPlugin(NekoPluginBase):
             self._save_state_locked()
 
         self._uninstall_push_mapper()
-        # 停止HTTP服务器
-        self._stop_music_server()
 
     @plugin_entry(
         id="upload_music_file",
@@ -2349,12 +2154,10 @@ class XiYinPavilionPlugin(NekoPluginBase):
             detected_duration if detected_duration is not None else _DEFAULT_TRACK_DURATION_SECONDS
         )
         lyric_clean = str(lyric_text or "").replace("\r\n", "\n").strip()[:_LYRIC_PUSH_MAX_CHARS]
-        # 保存原始 item_id 用于歌词兜底查找
-        lookup_item_id = str(item_id or "").strip()
         if not lyric_clean:
             async with self._state_lock:
                 source_item = self._find_music_item_locked(
-                    item_id=lookup_item_id,
+                    item_id=item_id,
                     url=link,
                     title=final_title,
                     artist=final_artist,

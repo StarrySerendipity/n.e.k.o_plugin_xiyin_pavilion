@@ -13,11 +13,11 @@ def test_plugin_toml_exists():
 
 def test_entry_module_exists():
     root = Path(__file__).parent.parent
-    entry_path = root / "plugins" / "xiyin_pavilion" / "__init__.py"
-    assert entry_path.is_file(), "entry module plugins/xiyin_pavilion/__init__.py must exist"
+    entry_path = root / "__init__.py"
+    assert entry_path.is_file(), "entry module __init__.py must exist at root"
 
 
 def test_plugin_toml_has_entry():
     root = Path(__file__).parent.parent
     toml_text = (root / "plugin.toml").read_text(encoding="utf-8")
-    assert 'entry = "plugins.xiyin_pavilion:' in toml_text, "plugin.toml must declare entry"
+    assert 'entry = "plugin.plugins.xiyin_pavilion:' in toml_text, "plugin.toml must declare entry with plugin.plugins. prefix"

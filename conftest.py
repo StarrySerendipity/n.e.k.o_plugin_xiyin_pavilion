@@ -2,6 +2,7 @@
 import sys
 from unittest.mock import MagicMock
 
+
 class _FakeNekoPluginBase:
     def __init__(self, ctx=None, **_kwargs) -> None:
         self.ctx = ctx

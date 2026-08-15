@@ -2,8 +2,8 @@
 发布汐音阁插件 v0.3.0 到插件商城
 """
 import json
-import urllib.request
 import time
+import urllib.request
 
 SESSION = "neko-plugin-market"
 BASE = "http://127.0.0.1:10086/command"

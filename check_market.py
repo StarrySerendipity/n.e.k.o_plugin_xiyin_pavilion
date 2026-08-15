@@ -2,6 +2,7 @@
 检查插件市场页面结构
 """
 import json
+import time
 import urllib.request
 
 SESSION = "neko-plugin-market"
@@ -28,7 +29,7 @@ send("navigate", {
     "newTab": False,
     "group_title": "插件商城"
 })
-import time
+
 time.sleep(3)
 
 # 获取当前URL

@@ -2,8 +2,8 @@
 检查我的插件页面
 """
 import json
-import urllib.request
 import time
+import urllib.request
 
 SESSION = "neko-plugin-market"
 BASE = "http://127.0.0.1:10086/command"

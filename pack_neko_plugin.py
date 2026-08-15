@@ -1,8 +1,9 @@
 """
 打包汐音阁插件为 .neko-plugin 格式
 """
-import os
+import hashlib
 import shutil
+
 try:
     import tomllib
 except ImportError:
@@ -56,7 +57,6 @@ with open(pack_dir / "manifest.toml", "w", encoding="utf-8") as f:
     f.write(manifest_content)
 
 # 创建 metadata.toml
-import hashlib
 digest = hashlib.sha256()
 for path in sorted(payload_dir.rglob("*")):
     if not path.is_dir():

@@ -1736,12 +1736,19 @@ class XiYinPavilionPlugin(NekoPluginBase):
         if not domains:
             raise ValueError("url 无法安全加入播放白名单")
 
+        # 最新版前端 isSafeUrl 对 HTTP URL 要求 pluginHttpUrls 精确匹配完整 URL，
+        # 必须通过 http_urls 字段把完整音乐 URL 传给前端。
+        http_urls = [url] if url.lower().startswith("http://") else []
         self.ctx.push_message(
             source="xiyin_pavilion",
             message_type="music_allowlist_add",
             description=f"Allow music host: {domains[0]}",
             priority=7,
-            metadata={"domains": domains, "event_id": event_id},
+            metadata={
+                "domains": domains,
+                "http_urls": http_urls,
+                "event_id": event_id,
+            },
             target_lanlan=target_lanlan,
         )
 
